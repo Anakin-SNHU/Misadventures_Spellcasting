@@ -333,18 +333,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   slots:
-  - slotName: Spell 1
+  - slotName: Circle
     key: 49
     assigned: 1
     runeSprite: {fileID: 21300000, guid: 8da9a64beee5a934e800b81cc6195ec2, type: 3}
-  - slotName: Spell 2
+  - slotName: Square
     key: 50
     assigned: 1
-    runeSprite: {fileID: 0}
-  - slotName: Spell 3
+    runeSprite: {fileID: 21300000, guid: dc7b138ca34961e4383294cb28d8da4c, type: 3}
+  - slotName: Triangle
     key: 51
     assigned: 1
-    runeSprite: {fileID: 0}
+    runeSprite: {fileID: 21300000, guid: 7c9785578ed7e414cb84526bbdc6bd08, type: 3}
   - slotName: Spell 3
     key: 51
     assigned: 0
