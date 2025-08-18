@@ -5,41 +5,52 @@ using UnityEngine;
 public class SpellPad : MonoBehaviour
 {
     [Header("Refs")]
-    public Camera cam;                   // Camera Main
-    public Transform strokeContainer;    // StrokeContainer (empty child)
-    public SimpleFPSController player;   // Your FPS controller
-    public Material lineMaterial;        // Unlit/Color (white)
+    public Camera cam;                    // Camera Main
+    public Transform strokeContainer;     // child: StrokeContainer
+    public SimpleFPSController player;    // your FPS controller
+    public Material lineMaterial;         // Unlit/Color (white)
+
+    [Header("Combos & Casting")]
+    public SpellLibrary library;          // on SpellcastingManager
+    public Transform vfxAnchor;           // usually Camera Main
+    public float sequenceTimeout = 0.6f;  // seconds between strokes in a combo
+    public bool autoHideOnSuccess = true;
+
+    // Set by your hotkey script when opening the pad (IDs must match library combos)
+    [HideInInspector] public string[] allowedCombos;
 
     [Header("Drawing")]
-    public float minPixelStep = 6f;      // pixels between samples
-    public float lineWidth = 0.01f;      // LineRenderer width
-    public float sequenceTimeout = 0.6f; // reserved for combos later
-    public float zEpsilon = 0.001f;      // push stroke toward camera
+    public float minPixelStep = 6f;       // screen pixels between samples
+    public float lineWidth = 0.01f;       // LineRenderer width
+    public float zEpsilon = 0.001f;       // push stroke toward camera to avoid z-fighting
 
     private Plane drawPlane;
     private LineRenderer currentLine;
     private readonly List<Vector3> worldPoints = new List<Vector3>();
     private readonly List<Vector2> localPoints = new List<Vector2>();
-    private readonly List<PrimitiveGesture> recentGestures = new List<PrimitiveGesture>();
-    private float lastStrokeTime = -999f;
+
+    // recent gesture buffer (with timestamps) to allow combos of any length
+    private struct GestureStamp { public PrimitiveGesture g; public float t; }
+    private readonly List<GestureStamp> recentStamped = new List<GestureStamp>();
+    private readonly List<PrimitiveGesture> recent = new List<PrimitiveGesture>(); // scratch list
 
     void Awake()
     {
-        // Plane that faces the camera (normal points away from camera)
         drawPlane = new Plane(-transform.forward, transform.position);
     }
 
     void OnEnable()
     {
-        // Refresh the plane in case the pad moved
+        // refresh plane in case pad moved
         drawPlane.SetNormalAndPosition(-transform.forward, transform.position);
         ClearPad();
+        ClearRecent();
         LockLook(true); // free mouse, freeze camera look
     }
 
     void OnDisable()
     {
-        LockLook(false); // restore look + cursor lock
+        LockLook(false);
     }
 
     void Update()
@@ -47,7 +58,12 @@ public class SpellPad : MonoBehaviour
         if (Input.GetMouseButtonDown(0)) BeginStroke();
         if (Input.GetMouseButton(0) && currentLine != null) ContinueStroke();
         if (Input.GetMouseButtonUp(0) && currentLine != null) EndStroke();
+
+        // prune expired gestures so combos must be quick
+        PruneOldGestures(Time.time - sequenceTimeout);
     }
+
+    // ----- drawing -----
 
     void BeginStroke()
     {
@@ -62,7 +78,7 @@ public class SpellPad : MonoBehaviour
         currentLine.numCornerVertices = 4;
         currentLine.numCapVertices = 4;
         currentLine.alignment = LineAlignment.View;
-        currentLine.sortingOrder = 1000; // ensure on top
+        currentLine.sortingOrder = 1000;
         currentLine.positionCount = 0;
 
         AddPointFromMouse(true);
@@ -76,12 +92,54 @@ public class SpellPad : MonoBehaviour
     void EndStroke()
     {
         PrimitiveGesture g = PrimitiveRecognizer.Classify(localPoints);
-        recentGestures.Add(g);
-        lastStrokeTime = Time.time;
-
-        // For the snapshot: clear pad on any valid primitive
         if (g != PrimitiveGesture.Unknown)
+        {
+            recentStamped.Add(new GestureStamp { g = g, t = Time.time });
+            BuildRecentList();
+
+            if (library != null && library.TryMatch(recent, out var matched, out int consumed))
+            {
+                // check per-slot whitelist
+                bool allowed = true;
+                if (allowedCombos != null && allowedCombos.Length > 0)
+                {
+                    allowed = System.Array.Exists(allowedCombos, id => id == matched.id);
+                }
+
+                if (allowed)
+                {
+                    // optional VFX
+                    if (matched.vfxPrefab != null && vfxAnchor != null)
+                    {
+                        Instantiate(matched.vfxPrefab,
+                            vfxAnchor.position + vfxAnchor.forward * 1.0f,
+                            vfxAnchor.rotation);
+                    }
+
+                    ConsumeTail(consumed);
+
+                    if (autoHideOnSuccess)
+                    {
+                        gameObject.SetActive(false); // put pad away
+                        currentLine = null;
+                        return;
+                    }
+                }
+
+                // success but staying open OR not allowed for this slot:
+                ClearPad();
+            }
+            else
+            {
+                // no match yet; clear visual but keep buffer
+                ClearPad();
+            }
+        }
+        else
+        {
+            // not a primitive; clear visual
             ClearPad();
+        }
 
         currentLine = null;
     }
@@ -92,17 +150,17 @@ public class SpellPad : MonoBehaviour
         float enter;
         if (!drawPlane.Raycast(ray, out enter)) return;
 
-        // World position on the pad plane
+        // world point on the plane
         Vector3 world = ray.GetPoint(enter);
 
-        // Convert to pad local space (so recognizer is resolution independent)
+        // to local (pad) space
         Vector3 local3 = transform.InverseTransformPoint(world);
         Vector2 local = new Vector2(local3.x, local3.y);
 
-        // Clamp to the quad bounds so strokes cannot leave the pad
+        // clamp to quad bounds so strokes never leave the pad
         ClampToPad(ref local);
 
-        // Rebuild a clamped world position and nudge toward camera to avoid z-fighting
+        // rebuild clamped world position and lift it slightly toward camera
         world = transform.TransformPoint(new Vector3(local.x, local.y, 0f));
         world += -transform.forward * zEpsilon;
 
@@ -113,11 +171,9 @@ public class SpellPad : MonoBehaviour
             currentLine.positionCount = worldPoints.Count;
             currentLine.SetPosition(worldPoints.Count - 1, world);
         }
-        else
+        else if (worldPoints.Count > 0)
         {
-            // Smoothly update the last point while moving between samples
-            if (worldPoints.Count > 0)
-                currentLine.SetPosition(worldPoints.Count - 1, world);
+            currentLine.SetPosition(worldPoints.Count - 1, world);
         }
     }
 
@@ -143,7 +199,7 @@ public class SpellPad : MonoBehaviour
         Cursor.visible = unlockMouseForDrawing;
     }
 
-    // Quad local space spans roughly [-0.5, 0.5] in X and Y
+    // quad local space spans roughly [-0.5, 0.5] in X and Y
     bool ClampToPad(ref Vector2 local)
     {
         float x = Mathf.Clamp(local.x, -0.5f, 0.5f);
@@ -151,5 +207,35 @@ public class SpellPad : MonoBehaviour
         bool inside = (local.x >= -0.5f && local.x <= 0.5f && local.y >= -0.5f && local.y <= 0.5f);
         local = new Vector2(x, y);
         return inside;
+    }
+
+    // ----- combo buffer utils -----
+
+    void PruneOldGestures(float cutoff)
+    {
+        int i = 0;
+        for (; i < recentStamped.Count; i++)
+            if (recentStamped[i].t >= cutoff) break;
+        if (i > 0) recentStamped.RemoveRange(0, i);
+    }
+
+    void BuildRecentList()
+    {
+        recent.Clear();
+        for (int i = 0; i < recentStamped.Count; i++)
+            recent.Add(recentStamped[i].g);
+    }
+
+    void ConsumeTail(int count)
+    {
+        for (int i = 0; i < count && recentStamped.Count > 0; i++)
+            recentStamped.RemoveAt(recentStamped.Count - 1);
+        BuildRecentList();
+    }
+
+    void ClearRecent()
+    {
+        recentStamped.Clear();
+        recent.Clear();
     }
 }

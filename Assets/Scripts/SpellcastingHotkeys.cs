@@ -4,19 +4,30 @@ using UnityEngine;
 
 public class SpellcastingHotkeys : MonoBehaviour
 {
-    public SpellPad spellPad;          // drag the SpellPad component here
-    public Transform padTransform;     // drag the SpellPad transform here
-    public Camera playerCam;           // Camera Main
-    public float padDistance = 0.6f;   // meters in front of camera
+    [System.Serializable]
+    public class Slot
+    {
+        public string name = "Slot";
+        public KeyCode key = KeyCode.Alpha1;
+        public bool assigned = true;
+        // IDs from SpellLibrary.combos[i].id that this slot allows
+        public string[] allowedComboIds;
+    }
+
+    public SpellPad spellPad;        // drag the SpellPad component here
+    public Transform padTransform;   // drag the SpellPad transform here
+    public Camera playerCam;         // Camera Main
+    public float padDistance = 0.6f;
     public Vector2 padScale = new Vector2(0.6f, 0.6f);
 
-    // mark which slots are "assigned" (true = enabled)
-    public bool[] slotAssigned = new bool[10] { true, true, true, false, false, false, false, false, false, false };
-
-    KeyCode[] keys = new KeyCode[]
+    // Configure your slots in the Inspector
+    public Slot[] slots = new Slot[]
     {
-        KeyCode.Alpha1, KeyCode.Alpha2, KeyCode.Alpha3, KeyCode.Alpha4, KeyCode.Alpha5,
-        KeyCode.Alpha6, KeyCode.Alpha7, KeyCode.Alpha8, KeyCode.Alpha9, KeyCode.Alpha0
+        new Slot { name="1", key=KeyCode.Alpha1, assigned=true,  allowedComboIds = new []{ "Spell_H" } },
+        new Slot { name="2", key=KeyCode.Alpha2, assigned=true,  allowedComboIds = new []{ "Spell_V" } },
+        new Slot { name="3", key=KeyCode.Alpha3, assigned=true,  allowedComboIds = new []{ "Spell_Slash" } },
+        // add more as needed; e.g. a combo slot:
+        // new Slot { name="4", key=KeyCode.Alpha4, assigned=true, allowedComboIds = new []{ "Spell_H_S_V" } },
     };
 
     int activeIndex = -1;
@@ -28,12 +39,11 @@ public class SpellcastingHotkeys : MonoBehaviour
 
     void Update()
     {
-        // handle 1..0
-        for (int i = 0; i < keys.Length; i++)
+        for (int i = 0; i < slots.Length; i++)
         {
-            if (Input.GetKeyDown(keys[i]))
+            if (Input.GetKeyDown(slots[i].key))
             {
-                if (!slotAssigned[i]) return;
+                if (!slots[i].assigned) return;
 
                 if (activeIndex == i)
                 {
@@ -54,7 +64,6 @@ public class SpellcastingHotkeys : MonoBehaviour
     {
         activeIndex = index;
 
-        // position and orient the pad in front of the camera
         if (padTransform != null && playerCam != null)
         {
             padTransform.SetParent(playerCam.transform, false);
@@ -63,7 +72,12 @@ public class SpellcastingHotkeys : MonoBehaviour
             padTransform.localScale = new Vector3(padScale.x, padScale.y, 1f);
         }
 
-        if (spellPad != null) spellPad.gameObject.SetActive(true);
+        if (spellPad != null)
+        {
+            // pass the whitelist to the pad
+            spellPad.allowedCombos = slots[index].allowedComboIds;
+            spellPad.gameObject.SetActive(true);
+        }
     }
 
     void HidePad()
